@@ -1,0 +1,4 @@
+fastapi>=0.110
+uvicorn>=0.27
+rarfile>=4.1
+pillow>=10.0

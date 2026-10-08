@@ -1,0 +1,11 @@
+# local state - never commit the index, the thumbnails or test scratch
+data/
+*.db
+*.db-wal
+*.db-shm
+thumbs/
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
