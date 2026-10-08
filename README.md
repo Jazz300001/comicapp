@@ -80,8 +80,53 @@ python -m longbox.server --path "C:\Users\jasro\Desktop\comics" --db data\longbo
 Leave that window open while you use Longbox (close it or press **Ctrl+C** to
 stop). It only listens on your own PC — nothing outside can reach it.
 
-## 5. Look at it in the browser
+## 5. Using the app
+Open <http://127.0.0.1:8765> in a browser on your PC. That one page is the whole
+app — it has three screens and nothing to install.
 
+**Library (the home screen)** — a grid of cover cards, one per comic, each with
+its series, issue number, year, page count and a Read/Unread badge. Hover a card
+you have already started and it offers "Continue p.N"; clicking the card goes
+straight back to that page.
+
+* The search box filters as you type (it matches series, title, writer and
+  character). Series, year, read state and sort order are the dropdowns next to
+  it; "File state" narrows the grid to files Longbox could not read.
+* Every filter lives in the address bar — for example
+  <http://127.0.0.1:8765/#/?q=x-men&read=false&sort=issue> — so refreshing, the
+  Back button and bookmarks all keep the filter you had.
+* "Load more" fetches the next 60 comics; the whole library is never loaded at
+  once, which keeps it quick even with thousands of files.
+* The strip along the top shows your totals. If any file failed it shows
+  "N unreadable files": click that (or pick "Unreadable files" in File state) to
+  see every filename with the reason it failed.
+* "Rescan library" re-reads your comics folder without restarting, showing how
+  many files it found, added, updated or could not read when it finishes.
+
+**Issue page** — click a cover. It shows the metadata that is already inside the
+file: series, issue, title, date, publisher, page count, the full summary with
+its line breaks, the creator credits, and chips for the characters, teams and
+locations the file records. "Read" (or "Continue from page N" if you have
+started it) opens the reader; there is also a Mark as read/unread button and a
+link back to the library that keeps your filters. If the file itself is
+unreadable, you get the reason here instead of a broken reader.
+
+**Reader** — one comic page, fitted to the window.
+
+* Click the page, or press Space / → / PageDown, for the next page. ← / PageUp
+  go back, Home and End jump to the first and last page, Esc returns to the
+  issue page.
+* The next page is preloaded while you read, so turning the page is instant; a
+  slow page shows "Loading page N…" instead of a blank screen.
+* Your place is saved by itself (a moment after you stop turning pages, and
+  again when you close the tab), so the issue always resumes where you stopped.
+* Reaching the last page marks the issue read.
+* On the last page, if the next issue of that series is in your library, a
+  "Next issue" link appears.
+* If a page cannot be read, the reader says which page failed and offers Try
+  again or Skip to the next page — one bad page never blocks the reader.
+
+### The same data as JSON
 Open these addresses (in a browser, or with `curl` in a second PowerShell window).
 127.0.0.1 means "this computer":
 
@@ -90,6 +135,9 @@ Open these addresses (in a browser, or with `curl` in a second PowerShell window
 * Search — <http://127.0.0.1:8765/api/comics?q=x-men>
 * Your series list with counts — <http://127.0.0.1:8765/api/series>
 * Totals — <http://127.0.0.1:8765/api/stats>
+* The years in your library — <http://127.0.0.1:8765/api/years>
+* Only the unreadable files, with the reason — <http://127.0.0.1:8765/api/comics?status=error>
+* Only the files that have gone missing — <http://127.0.0.1:8765/api/comics?status=missing>
 * One issue in full — <http://127.0.0.1:8765/api/comics/1>
 * A cover image — <http://127.0.0.1:8765/api/comics/1/thumbnail>
 * Page 1 of an issue — <http://127.0.0.1:8765/api/comics/1/pages/1>
@@ -163,15 +211,16 @@ python -m longbox.server --path testcomics --db data\test.db --port 8765
 
 ## For whoever works on this next
 
-* Tests: `python -m pytest` (75 tests, uses throwaway fixtures built by
+* Tests: `python -m pytest` (89 tests, uses throwaway fixtures built by
   `scripts/make_fixtures.py`, never your real folder).
 * `samples/` holds a real `ComicInfo.xml` from the collection plus `NOTES.md`, the
   eight facts the parser and tests are built around.
 * Layout: `longbox/parser.py` (filenames), `longbox/comicinfo.py` (XML),
   `longbox/archive.py` (read-only CBZ/CBR + thumbnails), `longbox/db.py` (SQLite),
   `longbox/scanner.py` + `longbox/scan.py` (indexing CLI), `longbox/server.py`
-  (JSON API CLI).
-* Not built yet, in order: the web UI (library grid + reader with resume), Docker
+  (web UI + JSON API CLI), `longbox/static/` (the UI: `index.html`, `app.js`,
+  `styles.css` — plain files, no build step, no CDN, served at `/`).
+* Not built yet, in order: Docker
   Compose with a read-only comics mount, integrity/duplicate checker, the metadata
   graph over the embedded `Characters`/`Teams`/`Locations`, panel extractor, then
   the timeline / character-network / "where am I?" views.

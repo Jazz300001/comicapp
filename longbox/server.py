@@ -16,7 +16,8 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import archive as archive_mod
@@ -35,6 +36,10 @@ SORT_OPTIONS = {
 }
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 500
+
+#: the web UI (plain HTML/CSS/JS, no build step) lives next to this file
+STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+INDEX_FILE = os.path.join(STATIC_DIR, "index.html")
 
 BRIEF_FIELDS = (
     "id", "filename", "series", "series_key", "volume_raw", "volume_kind",
@@ -135,10 +140,11 @@ def create_app(comics_path: str | None = None, db_path: str | None = None,
         return row
 
     # ------------------------------------------------------------------ meta
-    @app.get("/")
-    def root() -> dict:
-        return {"name": "Longbox", "version": "0.1.0", "api": "/api/health",
-                "comics_folder": comics_path}
+    @app.get("/", include_in_schema=False)
+    def root() -> HTMLResponse:
+        """The web UI itself (library, issue detail, reader)."""
+        with open(INDEX_FILE, encoding="utf-8") as handle:
+            return HTMLResponse(handle.read())
 
     @app.get("/api/health")
     def health() -> dict:
@@ -186,6 +192,7 @@ def create_app(comics_path: str | None = None, db_path: str | None = None,
         series: str | None = None,
         year: int | None = None,
         read: bool | None = None,
+        status: str | None = None,
         sort: str = "series",
         limit: int = Query(default=DEFAULT_LIMIT, ge=1, le=MAX_LIMIT),
         offset: int = Query(default=0, ge=0),
@@ -204,6 +211,10 @@ def create_app(comics_path: str | None = None, db_path: str | None = None,
         if year is not None:
             where.append("c.year = ?")
             params.append(year)
+        if status:
+            # 'ok' (readable), 'error' (unreadable file) or 'missing' (file gone)
+            where.append("c.status = ?")
+            params.append(status.strip().lower())
         if read is True:
             where.append('p."read" = 1')
         elif read is False:
@@ -220,6 +231,17 @@ def create_app(comics_path: str | None = None, db_path: str | None = None,
         ).fetchall()
         return {"items": [_brief(row) for row in rows], "total": total,
                 "limit": limit, "offset": offset, "sort": sort}
+
+    @app.get("/api/years")
+    def year_list() -> dict:
+        """Years present in the library, newest first - fills the year filter."""
+        rows = conn.execute(
+            "SELECT year, COUNT(*) AS count FROM comics WHERE year IS NOT NULL "
+            "GROUP BY year ORDER BY year DESC"
+        ).fetchall()
+        return {"items": [{"year": int(row["year"]), "count": int(row["count"])}
+                          for row in rows],
+                "total": len(rows)}
 
     @app.get("/api/series")
     def series_list() -> dict:
@@ -327,6 +349,11 @@ def create_app(comics_path: str | None = None, db_path: str | None = None,
             conn.close()
         except Exception:
             pass
+
+    # The UI's own files.  Mounted last so /api/... always wins; the HTML shell
+    # is served at / above, and the app's screens are hash routes inside it.
+    if os.path.isdir(STATIC_DIR):
+        app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     return app
 
