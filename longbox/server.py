@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 from . import archive as archive_mod
 from . import db as db_mod
 from . import parser as parser_mod
+from . import tools as tools_mod
 from .scanner import scan_library
 
 SORT_OPTIONS = {
@@ -45,8 +46,24 @@ BRIEF_FIELDS = (
     "id", "filename", "series", "series_key", "volume_raw", "volume_kind",
     "issue_number", "issue_sort", "year", "month", "publisher", "page_count",
     "cover_page", "comicinfo_present", "comicvine_issue_id", "archive_type",
-    "status", "error_message", "file_size", "indexed_at",
+    "archive_container", "container_mismatch", "status", "error_message",
+    "error_kind", "file_size", "indexed_at",
 )
+
+#: what the owner can do about each kind of unreadable file (shown grouped, once)
+FIX_HINTS = {
+    "rar_tool_missing": ("Install 7-Zip (free, 7-zip.org) or WinRAR, then scan again - "
+                         "every .cbr opens after that."),
+    "sevenzip_tool_missing": "Install 7-Zip from 7-zip.org, then scan again.",
+    "archive_tool_failed": ("The RAR tool on this PC could not read these files - they may "
+                            "be incomplete downloads or use multi-part volumes."),
+    "container_unknown": "No zip, rar or 7z signature inside: the file is not an archive.",
+    "corrupt_zip": "The zip container is damaged and cannot be listed.",
+    "archive_unreadable": "The archive could not be read.",
+    "comicinfo_invalid": "The embedded ComicInfo.xml could not be parsed (the pages still read fine).",
+    "file_missing": "The file is no longer in the comics folder.",
+    "unknown": "The scanner did not record a reason.",
+}
 CREATOR_FIELDS = ("writers", "pencillers", "inkers", "colorists", "letterers",
                   "cover_artists", "editors")
 DETAIL_EXTRA_FIELDS = ("path", "title", "day", "summary", "notes", "web",
@@ -168,10 +185,32 @@ def create_app(comics_path: str | None = None, db_path: str | None = None,
         # readable archives whose embedded ComicInfo.xml itself failed to parse
         metadata_problems = scalar("SELECT COUNT(*) FROM comics "
                                    "WHERE status = 'ok' AND error_message IS NOT NULL")
+        # 165 identical "no RAR tool" rows must read as one line with a count
+        error_groups = [
+            {"kind": str(row["kind"]), "count": int(row["count"]),
+             "reason": str(row["reason"] or ""),
+             "fix": FIX_HINTS.get(str(row["kind"]), "")}
+            for row in conn.execute(
+                "SELECT COALESCE(error_kind, 'unknown') AS kind, COUNT(*) AS count, "
+                "MIN(error_message) AS reason FROM comics WHERE status = 'error' "
+                "GROUP BY 1 ORDER BY 2 DESC").fetchall()
+        ]
+        containers = [
+            {"extension": row["extension"], "container": row["container"],
+             "count": int(row["count"]), "misnamed": int(row["misnamed"])}
+            for row in conn.execute(
+                "SELECT archive_type AS extension, archive_container AS container, "
+                "COUNT(*) AS count, SUM(COALESCE(container_mismatch, 0)) AS misnamed "
+                "FROM comics GROUP BY 1, 2 ORDER BY 3 DESC").fetchall()
+        ]
         return {
             "total": total,
             "ok": total - errors - missing,
             "errors": errors,
+            "errors_by_kind": error_groups,
+            "containers": containers,
+            "misnamed": scalar("SELECT COUNT(*) FROM comics WHERE container_mismatch = 1"),
+            "reader": tools_mod.tool_summary(),
             "metadata_problems": metadata_problems,
             "missing": missing,
             "with_comicinfo": with_info,
@@ -320,6 +359,47 @@ def create_app(comics_path: str | None = None, db_path: str | None = None,
             return Response(content=thumb, media_type="image/jpeg",
                             headers={"Cache-Control": "private, max-age=86400"})
         raise HTTPException(status_code=404, detail=f"thumbnail failed: {last_error}")
+
+    # --------------------------------------------------------------- problems
+    @app.get("/api/problems")
+    def problems(status: str | None = None,
+                 limit: int = Query(default=200, ge=1, le=MAX_LIMIT)) -> dict:
+        """Everything that did not index, GROUPED by reason.
+
+        A collection that is mostly .cbr without a RAR tool on the PC has hundreds of
+        rows sharing one reason, so the API (and the panel) report one line with a
+        count plus the first few filenames - not the same sentence 165 times.
+        """
+        where = "c.status != 'ok'"
+        params: list[Any] = []
+        if status:
+            where += " AND c.status = ?"
+            params.append(status.strip().lower())
+        rows = conn.execute(
+            f"SELECT c.* FROM comics c WHERE {where} "
+            "ORDER BY COALESCE(c.error_kind, ''), lower(c.filename)", params).fetchall()
+        groups: dict[str, dict] = {}
+        for row in rows:
+            kind = (row["error_kind"]
+                    or ("file_missing" if row["status"] == "missing" else "unknown"))
+            group = groups.setdefault(kind, {
+                "kind": str(kind),
+                "count": 0,
+                "reason": row["error_message"] or "no reason recorded",
+                "fix": FIX_HINTS.get(kind, ""),
+                "container": row["archive_container"],
+                "files": [],
+            })
+            group["count"] += 1
+            if len(group["files"]) < limit:
+                group["files"].append({
+                    "id": row["id"], "filename": row["filename"], "path": row["path"],
+                    "status": row["status"], "container": row["archive_container"],
+                    "extension": row["archive_type"],
+                })
+        ordered = sorted(groups.values(), key=lambda group: -group["count"])
+        return {"total": len(rows), "groups": ordered,
+                "reader": tools_mod.tool_summary()}
 
     # -------------------------------------------------------------- progress
     @app.post("/api/comics/{comic_id}/progress")

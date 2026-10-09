@@ -309,6 +309,13 @@ button.stat-chip:hover { border-color: var(--accent); color: var(--ink); }
 .problem-name { font-family: var(--mono); font-size: 13px; word-break: break-all; }
 .problem-reason { color: var(--error); font-size: 13px; margin-top: 4px; }
 .problem-path { color: var(--ink-faint); font-size: 12px; margin-top: 3px; word-break: break-all; }
+.problem-group { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; }
+.problem-head { font-size: 14px; }
+.problem-head strong { font-size: 15px; }
+.problem-fix { color: var(--ink-soft); font-size: 13px; margin-top: 4px; }
+.problem-list { list-style: none; margin: 8px 0 0; padding: 0; }
+.problem-list .problem { background: none; border: 0; padding: 4px 0; margin: 0; }
+details > summary { cursor: pointer; font-size: 13px; margin-top: 6px; }
 
 /* -------------------------------------------------------------------- issue */
 .issue { max-width: 940px; }

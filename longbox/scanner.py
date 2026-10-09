@@ -16,6 +16,7 @@ from . import archive as archive_mod
 from . import comicinfo as comicinfo_mod
 from . import db as db_mod
 from . import parser as parser_mod
+from . import tools as tools_mod
 
 ProgressCallback = Callable[[int, int, str], None]
 
@@ -64,20 +65,27 @@ def read_comic(path: str) -> dict:
     """Read one archive. Returns index data; raises archive.ArchiveError."""
     filename_parsed = parser_mod.parse_filename(path)
     stat = os.stat(path)
+    container = archive_mod.detect_container(path)
+    mismatch = archive_mod.container_mismatch(path, container)
     data: dict = {
         "path": os.path.abspath(path),
         "filename": os.path.basename(path),
         "file_size": stat.st_size,
         "mtime": stat.st_mtime,
         "archive_type": archive_mod.archive_type(path),
+        "archive_container": container,
+        "container_mismatch": mismatch,
         "filename_parsed": filename_parsed,
         "status": "ok",
         "error_message": None,
+        "error_kind": None,
         "comicinfo_present": 0,
         "comicinfo_raw": None,
     }
 
     with archive_mod.open_archive(path) as handle:
+        data["archive_container"] = handle.container
+        data["container_mismatch"] = handle.mismatch
         page_names = handle.pages()
         info_member = handle.comicinfo_member()
         info = None
@@ -89,6 +97,7 @@ def read_comic(path: str) -> dict:
                 data["comicinfo_present"] = 1
             except comicinfo_mod.ComicInfoError as exc:
                 data["error_message"] = f"ComicInfo.xml unreadable: {exc}"
+                data["error_kind"] = "comicinfo_invalid"
 
     name_series = filename_parsed.get("series")
     name_year = filename_parsed.get("year")
@@ -155,6 +164,8 @@ def scan_library(comics_path: str, db_path: str,
         "errors": 0,
         "missing": 0,
         "error_files": [],
+        "error_kinds": {},
+        "reader": None,
         "elapsed": 0.0,
     }
 
@@ -168,15 +179,20 @@ def scan_library(comics_path: str, db_path: str,
             try:
                 data = read_comic(path)
             except archive_mod.ArchiveError as exc:
+                container = (getattr(exc, "container", None)
+                             or archive_mod.detect_container(path))
                 data = {
                     "path": os.path.abspath(path),
                     "filename": os.path.basename(path),
                     "archive_type": archive_mod.archive_type(path),
+                    "archive_container": container,
+                    "container_mismatch": archive_mod.container_mismatch(path, container),
                     "filename_parsed": parser_mod.parse_filename(path),
                     "file_size": os.path.getsize(path) if os.path.exists(path) else None,
                     "mtime": os.path.getmtime(path) if os.path.exists(path) else None,
                     "status": "error",
                     "error_message": str(exc),
+                    "error_kind": getattr(exc, "kind", None),
                 }
                 parsed = data["filename_parsed"]
                 data.update({
@@ -196,8 +212,12 @@ def scan_library(comics_path: str, db_path: str,
                 data = {
                     "path": os.path.abspath(path),
                     "filename": os.path.basename(path),
+                    "archive_type": archive_mod.archive_type(path),
+                    "archive_container": archive_mod.detect_container(path),
+                    "container_mismatch": 0,
                     "status": "error",
                     "error_message": f"unexpected error: {exc.__class__.__name__}: {exc}",
+                    "error_kind": "unexpected_error",
                 }
 
             # a readable archive with a broken ComicInfo.xml is still indexed,
@@ -213,8 +233,15 @@ def scan_library(comics_path: str, db_path: str,
                 summary["updated"] += 1
 
         summary["missing"] = db_mod.mark_missing(conn, seen, comics_path)
+        summary["error_kinds"] = {
+            str(row["kind"]): int(row["count"]) for row in conn.execute(
+                "SELECT COALESCE(error_kind, 'unknown') AS kind, COUNT(*) AS count "
+                "FROM comics WHERE status = 'error' GROUP BY 1 ORDER BY 2 DESC")
+        }
     finally:
         conn.close()
+
+    summary["reader"] = tools_mod.tool_summary()
 
     summary["elapsed"] = round(time.time() - started, 2)
     summary["total_in_db"] = _count(db_path)

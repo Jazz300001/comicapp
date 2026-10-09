@@ -22,7 +22,15 @@ COMIC_COLUMNS = (
     "scan_information", "notes", "web", "comicvine_issue_id", "page_count",
     "comicinfo_page_count", "pages", "cover_page", "comicinfo_present",
     "comicinfo_raw", "filename_parsed", "file_size", "mtime", "archive_type",
-    "status", "error_message", "indexed_at",
+    "archive_container", "container_mismatch", "status", "error_message",
+    "error_kind", "indexed_at",
+)
+
+#: columns added after the first release; databases in the wild are migrated in place
+ADDED_COLUMNS = (
+    ("archive_container", "TEXT"),
+    ("container_mismatch", "INTEGER"),
+    ("error_kind", "TEXT"),
 )
 
 SCHEMA = """
@@ -66,8 +74,11 @@ CREATE TABLE IF NOT EXISTS comics (
     file_size           INTEGER,
     mtime               REAL,
     archive_type        TEXT,
+    archive_container   TEXT,
+    container_mismatch  INTEGER,
     status              TEXT NOT NULL DEFAULT 'ok',
     error_message       TEXT,
+    error_kind          TEXT,
     indexed_at          TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_comics_series_key ON comics(series_key);
@@ -109,8 +120,33 @@ def connect(db_path: str | os.PathLike) -> sqlite3.Connection:
 
 def init_db(conn: sqlite3.Connection) -> sqlite3.Connection:
     conn.executescript(SCHEMA)
+    migrate(conn)
     conn.commit()
     return conn
+
+
+def migrate(conn: sqlite3.Connection) -> list[str]:
+    """Bring a database created by an earlier version up to date, in place.
+
+    The owner already has a library database, so `CREATE TABLE IF NOT EXISTS` is not
+    enough: new columns have to be added to the existing table.  Nothing is dropped
+    and no row is touched, so progress and read state survive.
+    """
+    present = {row[1] for row in conn.execute("PRAGMA table_info(comics)").fetchall()}
+    added: list[str] = []
+    for name, sql_type in ADDED_COLUMNS:
+        if name not in present:
+            conn.execute(f"ALTER TABLE comics ADD COLUMN {name} {sql_type}")
+            added.append(name)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_comics_error_kind ON comics(error_kind)")
+    if "error_kind" in added:
+        # rows the old scanner wrote at least keep a kind until the next scan
+        conn.execute(
+            "UPDATE comics SET error_kind = 'rar_tool_missing' "
+            "WHERE status = 'error' AND error_kind IS NULL "
+            "AND error_message LIKE '%unrar not installed%'"
+        )
+    return added
 
 
 def open_db(db_path: str | os.PathLike) -> sqlite3.Connection:

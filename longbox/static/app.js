@@ -377,17 +377,55 @@ function coverCard(item) {
 </article>`;
 }
 
+/* Everything that failed to index, grouped by reason: a collection that is mostly
+   .cbr on a PC with no RAR tool has hundreds of rows with the same sentence, and
+   repeating it 165 times buries the one thing the owner has to do. */
 function problemsPanel() {
-  const label = library.status === "missing" ? "Missing files" : "Unreadable files";
+  const missingView = library.status === "missing";
+  const label = missingView ? "Missing files" : "Unreadable files";
   const items = library.items;
   if (!items.length) return "";
-  const rows = items.map((item) => `<div class="problem">
-  <div class="problem-name">${esc(item.filename || item.path || "")}</div>
-  <div class="problem-reason">${esc(item.error_message || (item.status === "missing"
-      ? "file no longer present at this path" : "no reason recorded"))}</div>
-  <div class="problem-path">${esc(item.path || "")}</div>
-</div>`).join("");
-  return `<section class="problems"><h2>${esc(label)} (${items.length})</h2>${rows}</section>`;
+  const groups = new Map();
+  items.forEach((item) => {
+    const kind = item.error_kind ||
+      (item.status === "missing" ? "file_missing" : "unknown");
+    const reason = item.error_message || (item.status === "missing"
+      ? "file no longer present at this path" : "no reason recorded");
+    const key = `${kind}\u0000${reason}`;
+    if (!groups.has(key)) {
+      const hint = (lastStats && lastStats.errors_by_kind || [])
+        .find((entry) => entry.kind === kind);
+      groups.set(key, { kind, reason, fix: (hint && hint.fix) || "", files: [] });
+    }
+    groups.get(key).files.push(item);
+  });
+  const ordered = [...groups.values()].sort((a, b) => b.files.length - a.files.length);
+  const blocks = ordered.map((group) => {
+    const names = group.files.slice(0, 400).map((item) => `<li class="problem">
+  <span class="problem-name">${esc(item.filename || item.path || "")}</span>
+  <span class="problem-path">${esc(item.path || "")}</span>
+</li>`).join("");
+    const more = group.files.length > 400
+      ? `<li class="problem-path">… and ${group.files.length - 400} more</li>` : "";
+    return `<div class="problem-group">
+  <div class="problem-head"><strong>${group.files.length}</strong> ${esc(
+      group.files.length === 1 ? "file" : "files")} &mdash; ${esc(group.reason)}</div>
+  ${group.fix ? `<div class="problem-fix">${esc(group.fix)}</div>` : ""}
+  <details><summary>Show the file names</summary><ul class="problem-list">${names}${more}</ul></details>
+</div>`;
+  }).join("");
+  return `<section class="problems"><h2>${esc(label)} (${items.length})</h2>${blocks}</section>`;
+}
+
+/* What the file *really* is, from its magic bytes - a .cbr that is really a zip
+   opens with no external tool at all, and the owner should see that. */
+function containerLabel(comic) {
+  const names = { zip: "ZIP", rar4: "RAR (v4)", rar5: "RAR (v5)", "7z": "7z" };
+  const container = names[comic.archive_container] || comic.archive_container || "";
+  if (!container) return "";
+  const ext = comic.archive_type ? `.${comic.archive_type}` : "";
+  return comic.container_mismatch && ext
+    ? `${container} — file is named ${ext}` : container;
 }
 
 /* One place that decides whether a cover is showing or the placeholder is.
@@ -557,6 +595,7 @@ async function renderDetail(id) {
         ${fact("Year / month / day", esc(dateLabel(comic)))}
         ${fact("Publisher", esc(comic.publisher || ""))}
         ${fact("Pages", pages ? esc(String(pages)) : "")}
+        ${fact("Container", esc(containerLabel(comic)))}
         ${fact("Read state", comic.read ? "Read" : "Unread")}
         ${fact("Last page read", comic.last_page ? esc(String(comic.last_page)) : "")}
         ${fact("Volume (as written in the file)", esc(comic.volume_raw || ""))}

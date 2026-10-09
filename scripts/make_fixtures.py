@@ -191,7 +191,8 @@ def build(folder: Path, samples: Path = SAMPLES) -> list[str]:
     record(p)
 
     p = folder / "Batman #405 (1987) (digital).cbr"
-    # a zip renamed .cbr: proves the CBR path reports an error instead of guessing
+    # Named .cbr but the magic bytes are PK: a zip renamed .cbr, which is common in
+    # the wild and is read by the standard library with NO external tool at all.
     write_cbz(p, 3)
     record(p)
 
@@ -231,6 +232,15 @@ def build(folder: Path, samples: Path = SAMPLES) -> list[str]:
     p.write_bytes(b"this is not a zip file at all\n" * 20)
     record(p)
 
+    # 15. RAR signature only. The bytes start with the real RAR4 magic, which is all
+    #     the scanner needs to classify it as a RAR container; there is no RAR
+    #     compressor available in this environment, so the payload is padding and
+    #     NO tool can list it. It exists to prove the "no RAR tool on this PC" path:
+    #     the row is kept, with one short actionable reason, not an empty issue.
+    p = folder / "RAR Signature Only 1 (2025).cbr"
+    p.write_bytes(RAR4_SIGNATURE + bytes(64))
+    record(p)
+
     return written
 
 
@@ -254,3 +264,7 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+#: real RAR4 magic bytes, used by the signature-only fixture above
+RAR4_SIGNATURE = b"Rar!\x1a\x07\x00"

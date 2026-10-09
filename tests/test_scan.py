@@ -12,11 +12,12 @@ SAMPLE = Path(__file__).resolve().parents[1] / "samples" / "comicinfo_xmen_11.xm
 
 
 def test_summary_counts(scan_summary):
-    assert scan_summary["found"] == 14
-    assert scan_summary["indexed"] == 12          # 13 CBZ + 1 CBR, minus the corrupt one
-    assert scan_summary["errors"] == 2            # corrupt .cbz + unreadable .cbr
+    assert scan_summary["found"] == 15
+    # 13 readable - including a zip renamed .cbr - plus 2 unreadable = 15
+    assert scan_summary["indexed"] == 13
+    assert scan_summary["errors"] == 2            # corrupt .cbz + RAR with no tool
     assert scan_summary["missing"] == 0
-    assert scan_summary["total_in_db"] == 14
+    assert scan_summary["total_in_db"] == 15
 
 
 def test_corrupt_archive_is_recorded_as_an_error_not_a_crash(conn):
@@ -32,16 +33,33 @@ def test_corrupt_archive_is_recorded_as_an_error_not_a_crash(conn):
     assert row["year"] == 2015
 
 
-def test_cbr_without_unrar_is_reported_honestly(conn):
+def test_zip_named_cbr_is_indexed_by_its_magic_bytes(conn):
+    """A .cbr whose bytes are really a zip opens with the standard library."""
     row = conn.execute(
-        "SELECT * FROM comics WHERE archive_type = 'cbr'"
+        "SELECT * FROM comics WHERE filename = 'Batman #405 (1987) (digital).cbr'"
     ).fetchone()
+    assert row["status"] == "ok"
+    assert row["archive_container"] == "zip"
+    assert row["container_mismatch"] == 1          # named .cbr, really a zip
+    assert row["page_count"] == 3
+    assert row["error_message"] is None
+    pages = __import__("json").loads(row["pages"])
+    assert [p["name"] for p in pages] == ["page1.jpg", "page2.jpg", "page3.jpg"]
+
+
+def test_rar_signature_is_recorded_with_one_actionable_reason(conn):
+    row = conn.execute(
+        "SELECT * FROM comics WHERE filename = 'RAR Signature Only 1 (2025).cbr'"
+    ).fetchone()
+    assert row["archive_container"] == "rar4"
+    assert row["container_mismatch"] == 0
     assert row["status"] == "error"
-    if archive_mod.rar_tool_available():
-        assert "CBR" in row["error_message"]
-    else:
-        assert row["error_message"] == archive_mod.UNRAR_MISSING_MESSAGE
-        assert "unrar not installed" in row["error_message"]
+    # either this PC has no RAR tool at all, or the one it has cannot list this
+    # signature-only file: both are ONE grouped reason, never a crash or a silent row
+    assert row["error_kind"] in {"rar_tool_missing", "archive_tool_failed"}
+    assert row["path"] and row["file_size"] == 71
+    if row["error_kind"] == "rar_tool_missing":
+        assert row["error_message"] == archive_mod.RAR_TOOL_MISSING_MESSAGE
 
 
 def test_mixed_volume_one_series_stays_one_series(conn):
@@ -136,9 +154,9 @@ def test_rescan_is_idempotent(result):
     before = {row["path"]: row["id"] for row in result.query("SELECT id, path FROM comics")}
     second = result.scan()
     after = {row["path"]: row["id"] for row in result.query("SELECT id, path FROM comics")}
-    assert first["found"] == second["found"] == 14
+    assert first["found"] == second["found"] == 15
     assert second["indexed"] == 0
-    assert second["updated"] == 12  # the 2 unreadable files stay errors
+    assert second["updated"] == 13  # the 2 unreadable files stay errors
     assert second["errors"] == 2
     assert before == after                       # same rows, same ids, no duplicates
 
