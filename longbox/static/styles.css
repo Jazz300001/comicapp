@@ -187,6 +187,15 @@ button.stat-chip:hover { border-color: var(--accent); color: var(--ink); }
   height: 100%;
   object-fit: cover;
   display: block;
+  /* Paint the cover above `.cover-fallback`. Both live in the same stacking
+     context (the cover box is `position: relative` with `z-index: auto`, so it
+     does not open one of its own): the fallback is positioned with `z-index:
+     auto`, which paints at level 0, so a positioned image at level 1 wins on
+     paint order no matter which of the two comes first in the markup. The
+     static image would otherwise paint *below* the absolutely positioned
+     fallback and be invisible on every card. */
+  position: relative;
+  z-index: 1;
 }
 .cover-fallback {
   position: absolute;
@@ -202,10 +211,16 @@ button.stat-chip:hover { border-color: var(--accent); color: var(--ink); }
   font-size: 12px;
   background: repeating-linear-gradient(135deg, #1c2027, #1c2027 10px, #22262e 10px, #22262e 20px);
 }
+/* The thumbnail really loaded: drop the placeholder entirely (it would show
+   through any transparent edge of the image and is redundant once we know the
+   image is there). `wireThumbs()` adds the class; it is also set for images
+   that were already complete before the wiring ran. */
 .cover-img.thumb-failed { display: none; }
+.cover-ready .cover-fallback { display: none; }
 
 .card-badges {
   position: absolute;
+  z-index: 2; /* above the cover image (z-index 1) — badges must stay readable */
   top: 6px;
   left: 6px;
   display: flex;
@@ -229,6 +244,7 @@ button.stat-chip:hover { border-color: var(--accent); color: var(--ink); }
 
 .card-continue {
   position: absolute;
+  z-index: 2; /* above the cover image (z-index 1) */
   left: 0;
   right: 0;
   bottom: 0;

@@ -7,6 +7,7 @@ the real files, nothing points at the internet, and the endpoints the screens
 call answer with the shape they expect.
 """
 
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -121,3 +122,50 @@ def test_rescan_button_has_an_endpoint_to_call(client):
     assert summary["errors"] == 2
     assert len(summary["error_files"]) == 2
     assert "elapsed" in summary and "total_in_db" in summary
+
+
+# --- cover paint order -------------------------------------------------------
+# Regression guard for a real defect: every card showed the "No cover image"
+# placeholder *over* a thumbnail that had loaded fine. The image must be
+# painted above the placeholder (CSS), and the placeholder must be dismissed
+# even when the image was already complete before the wiring code ran (JS).
+# These assertions read the served files, so they cannot prove what a browser
+# paints — they only pin the rules that a browser needs to paint it correctly.
+
+def css_rule(css: str, selector: str) -> str:
+    """Body of the first rule whose selector matches `selector` exactly."""
+    for match in re.finditer(r"([^{}]+)\{([^{}]*)\}", css):
+        if match.group(1).strip() == selector:
+            return match.group(2)
+    raise AssertionError(f"no CSS rule for {selector!r}")
+
+
+def test_cover_image_is_painted_above_the_placeholder(client):
+    css = client.get("/static/styles.css").text
+    image = css_rule(css, ".cover-img")
+    fallback = css_rule(css, ".cover-fallback")
+    # the image is positioned at stacking level 1, the placeholder has no
+    # z-index (level 0), so the image wins regardless of markup order
+    assert "position: relative" in image
+    assert "z-index: 1" in image
+    assert "z-index" not in fallback
+    # card chrome (read/unread badges, continue strip) must stay readable
+    for selector in (".card-badges", ".card-continue"):
+        assert "z-index: 2" in css_rule(css, selector), selector
+
+
+def test_placeholder_is_dismissed_by_the_wiring_code(client):
+    css = client.get("/static/styles.css").text
+    assert "display: none" in css_rule(css, ".cover-ready .cover-fallback")
+    js = client.get("/static/app.js").text
+    body = js[js.index("function wireThumbs"):]
+    body = body[:body.index("\n}")]
+    # a cached thumbnail is complete before the listeners exist, so the state
+    # has to be read at wiring time as well as from the load event
+    assert "img.complete" in body
+    assert "naturalWidth" in body
+    assert "\"error\"" in body and "\"load\"" in body
+    assert "setCoverState(img, true)" in body
+    # a loaded image dismisses the placeholder through the wrapper class the
+    # CSS rule above keys off
+    assert '"cover-ready"' in js

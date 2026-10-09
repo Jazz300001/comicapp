@@ -390,10 +390,25 @@ function problemsPanel() {
   return `<section class="problems"><h2>${esc(label)} (${items.length})</h2>${rows}</section>`;
 }
 
+/* One place that decides whether a cover is showing or the placeholder is.
+   `ok` means "a real image is on screen": the image is left visible and the
+   parent gets `cover-ready`, which drops `.cover-fallback` (styles.css). On a
+   genuine failure the image is hidden (`.thumb-failed`) and the fallback —
+   with its case-specific text — stays. */
+function setCoverState(img, ok) {
+  img.classList.toggle("thumb-failed", !ok);
+  const holder = img.closest(".card-cover, .issue-cover");
+  if (holder) holder.classList.toggle("cover-ready", ok);
+}
 function wireThumbs(root) {
   root.querySelectorAll("img.cover-img").forEach((img) => {
-    img.addEventListener("error", () => { img.classList.add("thumb-failed"); });
-    img.addEventListener("load", () => { img.classList.remove("thumb-failed"); });
+    img.addEventListener("error", () => { setCoverState(img, false); });
+    img.addEventListener("load", () => { setCoverState(img, true); });
+    /* A cached thumbnail is often already decoded before this code runs — its
+       `load` event fired in the past and will never fire for us, so asking for
+       the current state is the only way to dismiss the placeholder then.
+       `complete` is also true for a broken image, hence the naturalWidth test. */
+    if (img.complete) setCoverState(img, img.naturalWidth > 0);
   });
 }
 
