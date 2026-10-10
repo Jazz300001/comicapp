@@ -279,18 +279,87 @@ python -m longbox.server --path testcomics --db data\test.db --port 8765
 
 ---
 
+## 11. Checking your library — broken files, duplicates, missing numbers
+
+The doctor reads the index (never the comics folder) and tells you what is wrong with
+your collection. It only reports: it does not move, rename, edit or delete anything,
+and it never writes inside your comics folder.
+
+```
+python -m longbox.doctor --path "C:\Users\jasro\Desktop\comics" --db data\longbox.db
+```
+
+Add `--json` for scripting, `--no-save` to keep the run out of the database, and
+`--deep` when you want the slow, thorough pass. The report has three sections:
+
+1. **Unreadable or broken archives** — every file that did not index, grouped by
+   reason, so the 165 "no RAR tool" files are one line with a count, not 165
+   messages. Each group says what to do (`Install 7-Zip from 7-zip.org…`). Files
+   that are simply gone from disk are counted here too.
+2. **Duplicate issues** — issues that exist more than once, with each copy's folder,
+   size, page count, container and whether it has ComicInfo. You get a verdict:
+   *identical copies* (same size and page count — one file saved twice) or *different
+   quality* (one copy has bigger page images), and a **suggested** keeper. It is a
+   suggestion from the evidence in your files, so look at the copies before you
+   remove one — Longbox never deletes anything for you.
+3. **Missing issue numbers in a run** — per series, the numbers you have and the gaps,
+   e.g. `Civil War: have 1-2, 4 (3 file(s)) - MISSING 3`. Annuals, one-shots and files
+   with no (or a non-numeric) issue number are left out of the runs and counted at the
+   bottom of the section, and series with fewer than three numbered issues are not
+   called runs at all — so a single `Solo Run 1` is not a "missing 2". Reading-order
+   filenames (`008- Civil War 1.cbr`) are grouped under the real series, so the order
+   number never invents a series or a false gap. Where a series is genuinely ambiguous
+   (its numbers span two volumes), the gap is reported as *possibly missing* with the
+   reason, instead of being asserted.
+
+**`--deep`** (opt-in, the only slow mode) re-opens every archive and reads *every*
+page, which catches what a listing cannot: a page whose data is truncated, an empty
+page, or a ComicInfo page count that disagrees with the archive. It prints progress as
+it goes and is safe to interrupt with Ctrl-C. It extracts nothing next to your comics
+(any tool that needs a file on disk gets a system temp folder, which is removed
+again). The default run reads the database only and takes a second or two.
+
+Exit codes: **0** nothing to fix, **1** findings exist, **2** the run could not start
+(no comics folder, no index yet), **130** you interrupted `--deep`.
+`python -m longbox.doctor --help` lists every flag.
+
+Findings are also saved into two tables in the Longbox database so a later web panel
+can show them without re-running the checks: `doctor_runs` (one row: when, where,
+how long, counts) and `doctor_findings` (one row per thing to look at: `section`,
+`severity`, `kind`, series/issue, a plain-English `summary`, and a JSON `detail` with
+the evidence). The tables always hold the most recent run only, so a fixed problem
+does not keep showing up.
+
+Try the whole thing on the throwaway fixtures before your real folder:
+
+```
+python scripts\make_doctor_fixtures.py testdoctor
+python -m longbox.scan --path testdoctor --db data\testdoctor.db
+python -m longbox.doctor --path testdoctor --db data\testdoctor.db
+python -m longbox.doctor --path testdoctor --db data\testdoctor.db --deep
+```
+
+---
+
 ## For whoever works on this next
 
-* Tests: `python -m pytest` (109 tests, uses throwaway fixtures built by
+* Tests: `python -m pytest` (the whole suite, uses throwaway fixtures built by
   `scripts/make_fixtures.py`, never your real folder).
 * `samples/` holds a real `ComicInfo.xml` from the collection plus `NOTES.md`, the
   eight facts the parser and tests are built around.
 * Layout: `longbox/parser.py` (filenames), `longbox/comicinfo.py` (XML),
   `longbox/archive.py` (read-only CBZ/CBR + thumbnails), `longbox/db.py` (SQLite),
-  `longbox/scanner.py` + `longbox/scan.py` (indexing CLI), `longbox/server.py`
-  (web UI + JSON API CLI), `longbox/static/` (the UI: `index.html`, `app.js`,
-  `styles.css` — plain files, no build step, no CDN, served at `/`).
+  `longbox/scanner.py` + `longbox/scan.py` (indexing CLI), `longbox/doctor.py`
+  (integrity, duplicates, gaps + its own CLI),
+  `longbox/server.py` (web UI + JSON API CLI), `longbox/static/` (the UI:
+  `index.html`, `app.js`, `styles.css` — plain files, no build step, no CDN, served
+  at `/`). The doctor's fixtures live in `scripts/make_doctor_fixtures.py`.
+* Known rough edge: the filename parser keeps a leading reading-order number inside
+  the series name (`008- Civil War 1.cbr` → series `008- Civil War`); the doctor
+  strips it when grouping, but a re-scan of the owner's reading-order folders would
+  be cleaner if the parser did it too.
 * Not built yet, in order: Docker
-  Compose with a read-only comics mount, integrity/duplicate checker, the metadata
-  graph over the embedded `Characters`/`Teams`/`Locations`, panel extractor, then
+  Compose with a read-only comics mount, the problems/duplicates panel on top of
+  `doctor_findings`, the metadata graph over the embedded
+  `Characters`/`Teams`/`Locations`, panel extractor, then
   the timeline / character-network / "where am I?" views.
