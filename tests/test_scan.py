@@ -7,6 +7,7 @@ from pathlib import Path
 
 from longbox import archive as archive_mod
 from longbox import scanner
+from longbox import tools as tools_mod
 
 SAMPLE = Path(__file__).resolve().parents[1] / "samples" / "comicinfo_xmen_11.xml"
 
@@ -26,7 +27,11 @@ def test_corrupt_archive_is_recorded_as_an_error_not_a_crash(conn):
     ).fetchone()
     assert row is not None
     assert row["status"] == "error"
-    assert "corrupt" in row["error_message"].lower()
+    # the bytes identify no container at all, so the reason is the honest one: we
+    # do not know what this file is - not "corrupt zip", which would claim we did
+    assert row["error_kind"] == archive_mod.ERROR_CONTAINER_UNKNOWN
+    assert "not a comic archive" in row["error_message"].lower()
+    assert row["archive_container"] == "unknown"
     # the filename is still parsed, so the row is useful even when unreadable
     assert row["series"] == "Broken Scan"
     assert row["issue_number"] == "4"
@@ -59,7 +64,7 @@ def test_rar_signature_is_recorded_with_one_actionable_reason(conn):
     assert row["error_kind"] in {"rar_tool_missing", "archive_tool_failed"}
     assert row["path"] and row["file_size"] == 71
     if row["error_kind"] == "rar_tool_missing":
-        assert row["error_message"] == archive_mod.RAR_TOOL_MISSING_MESSAGE
+        assert row["error_message"] == tools_mod.RAR_TOOL_MISSING_MESSAGE
 
 
 def test_mixed_volume_one_series_stays_one_series(conn):

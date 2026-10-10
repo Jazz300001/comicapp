@@ -5,10 +5,10 @@ folder, writes down what is inside them, and serves that as a small local web
 address your browser can read. Nothing is uploaded, nothing is changed in your
 comics folder, and there is no login.
 
-**What works today (step 1 of the project):** the index and the data API. You can
-build the index, start the program, and read the library as data in your browser.
-**The browse/read pages themselves are the next step** — for now the browser shows
-JSON, not a grid of covers.
+**What works today:** the index, the data API and the whole browse/read web app —
+a cover grid with search and filters, an issue page, and a reader that remembers
+your place in every issue. Start at §4 and open <http://127.0.0.1:8765>; §5 walks
+through the screens. The JSON API from the same index is documented in §5 too.
 
 Everything happens on your PC. Your comics folder is opened **read-only**: Longbox
 never edits, moves, renames or adds files there.
@@ -20,10 +20,11 @@ never edits, moves, renames or adds files there.
 * **Windows 10 or 11** (or any PC with Python).
 * **Python 3.11 or newer** — from <https://www.python.org/downloads/windows/>.
   During installation, tick **"Add python.exe to PATH"**.
-* **Optional but recommended: UnRAR**, needed only for `.cbr` files
-  (<https://www.rarlab.com/download.htm>, the "UnRAR for Windows" link). Put
-  `UnRAR.exe` somewhere on your PATH. Without it, `.cbr` files are still listed,
-  but marked as an error — see Troubleshooting.
+* **Optional: a RAR reader for `.cbr` files** — most PCs already have one (see §8),
+  and a `.cbr` that is really a zip needs nothing at all. If yours is missing one,
+  install **7-Zip** from <https://www.7-zip.org/> (recommended) or **UnRAR** from
+  <https://www.rarlab.com/download.htm>. Without either, your `.cbr` files are
+  still listed — each one says why it could not be read, and nothing crashes.
 
 Check Python is installed: open **PowerShell** and run
 
@@ -179,13 +180,82 @@ folder** — Longbox will happily run even if that folder is read-only.
 * Port already in use? Add `--port 8899` to both commands.
 * To keep it private to your PC (the default), don't pass `--host`.
 
-## 8. If something looks wrong
+## 8. CBR files: how Longbox reads them
 
-* **Lists of `.cbr` files with "unrar not installed — CBR not readable"** — install
-  UnRAR (step 1) and re-scan. Your `.cbz` files do not need it.
-* **"corrupt zip (not a readable CBZ): File is not a zip file"** — that file is not
-  actually a working CBZ (a half-finished download, usually). Longbox lists it with
-  its name and number so you can find and replace it; it never crashes the scan.
+Longbox decides what a file really is from its **first bytes**, never from its
+name. So a file named `.cbr` that is really a zip — very common in collections
+put together by other tools — is read by Python itself and needs **no extra
+software at all**. A reader is only needed when the bytes really are a RAR (or a
+7z) archive.
+
+For those, Longbox tries readers **in this order**:
+
+1. `unrar` — WinRAR's `UnRAR.exe` counts
+2. `unar` — The Unarchiver
+3. bsdtar — Windows 10 (1803+) and Windows 11 ship one at
+   `C:\Windows\System32\tar.exe`
+4. `7z` — 7-Zip
+
+It looks on your PATH *and* in the usual install folders, so you never have to
+add anything to PATH: `C:\Windows\System32\tar.exe`, `C:\Program Files\7-Zip\7z.exe`,
+`C:\Program Files\WinRAR\UnRAR.exe`, plus the `Program Files (x86)`,
+`ProgramW6432` and `LOCALAPPDATA\Programs` equivalents. The first reader that
+really opens your file wins; if one exists but cannot open a particular archive,
+the next one in the list is tried, and a reader that fails is not asked again
+during that run. Because Windows' own `tar.exe` *is* bsdtar and reads RAR, most
+PCs need nothing installed at all.
+
+If your reader lives somewhere unusual, point Longbox straight at it and restart
+the server (permanent, in PowerShell):
+
+```
+setx LONGBOX_RAR_TOOL "D:\tools\UnRAR.exe"
+```
+
+or just for that window:
+
+```
+$env:LONGBOX_RAR_TOOL = "D:\tools\UnRAR.exe"
+```
+
+**Check a file by hand in PowerShell.** Use one of your real files:
+
+```
+tar -tf "C:\Users\jasro\Desktop\comics\Batman 1.cbr"
+```
+
+That prints the page names inside the file. If it does not, install 7-Zip from
+<https://www.7-zip.org/> and ask it directly:
+
+```
+& "C:\Program Files\7-Zip\7z.exe" l "C:\Users\jasro\Desktop\comics\Batman 1.cbr"
+```
+
+If neither of them can list the file, the file itself is damaged — that is not
+something Longbox can fix, but it will tell you which files those are.
+
+**When no reader is found.** Longbox does not stop, and it does not repeat the
+same error 165 times. Every unreadable file gets one row with a short reason, and
+the top of the page groups them: *"165 files — this is a RAR file and no RAR tool
+was found on this PC. Installing 7-Zip from 7-zip.org fixes it for all your .cbr
+files."* Install the tool it names, then click **Rescan library** — no need to
+restart or rebuild anything.
+
+Longbox never unpacks your comics next to themselves: where a tool has to write
+something to disk it goes to a temporary folder that is deleted straight away,
+and your comics folder stays untouched.
+
+## 9. If something looks wrong
+
+* **The "Problems" line names a missing RAR tool** — install the tool it names
+  (7-Zip is the easiest), then click **Rescan library**. What the message means:
+  the file really is a RAR archive and no program on your PC can unpack it yet.
+  Your `.cbz` files are unaffected, and a `.cbr` that is really a zip never needs
+  anything installed.
+* **"this is not a comic archive: no zip, rar or 7z signature in …"** — that file
+  is not an archive at all (a half-finished download, usually). Longbox lists it
+  with its name and number so you can find and replace it; it never crashes the
+  scan.
 * **A comic shows the wrong year** — the year Longbox displays is the one inside the
   file's `ComicInfo.xml` when there is one; the year in the filename is kept too and
   can be seen in the issue detail under `filename_parsed`.
@@ -196,7 +266,7 @@ folder** — Longbox will happily run even if that folder is read-only.
   your `.cbz`/`.cbr` files (`Get-ChildItem "C:\Users\jasro\Desktop\comics"` should
   list them).
 
-## 9. Try it on test comics first
+## 10. Try it on test comics first
 
 If you want to see it work without touching your real folder, this builds a small
 folder of made-up comics and indexes that instead:
@@ -211,7 +281,7 @@ python -m longbox.server --path testcomics --db data\test.db --port 8765
 
 ## For whoever works on this next
 
-* Tests: `python -m pytest` (89 tests, uses throwaway fixtures built by
+* Tests: `python -m pytest` (109 tests, uses throwaway fixtures built by
   `scripts/make_fixtures.py`, never your real folder).
 * `samples/` holds a real `ComicInfo.xml` from the collection plus `NOTES.md`, the
   eight facts the parser and tests are built around.

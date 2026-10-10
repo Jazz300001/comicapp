@@ -21,6 +21,16 @@ forces one specific executable (it is then trusted without the capability probe)
 The first candidate that exists and passes a cheap capability probe is cached for
 the run.  If that one turns out to fail on a real archive, the next candidate is
 tried and the failing tool is skipped for the rest of the run.
+
+The capability probe is deliberately *permissive*.  A probe is a guess, and a
+wrong guess here is expensive: it rejects a tool that would have worked, and the
+owner is told "no RAR tool found on this PC" while the tool sits on his disk.
+So the probe only *excludes* a tool when it positively recognises it as the wrong
+thing (GNU tar is not bsdtar - it cannot read RAR).  When the probe learns
+nothing — the tool exits non-zero, ignores ``--version``, prints something
+unrecognised, or its banner lands on stderr — the tool stays in the chain and is
+tried against a real archive, which is the only test that counts.  Only a
+demonstrable failure while opening a real archive retires a tool for the run.
 """
 
 from __future__ import annotations
@@ -74,13 +84,22 @@ WINDOWS_LOCATIONS = {
     ),
 }
 
-#: (extra argv, lowercase text the tool must print to prove what it is)
+#: (extra argv, text that proves the tool *is* this one, text that proves it is not)
+#:
+#: the third element is what makes the probe permissive: only a *recognised* wrong
+#: tool is rejected (``tar`` on Linux is GNU tar, which cannot read RAR).  Anything
+#: unrecognised is not a rejection, it is an open question - see ``PROBE_UNKNOWN``.
 PROBE = {
-    "unrar": ((), "unrar"),
-    "unar": (("-v",), "unar"),
-    "bsdtar": (("--version",), "bsdtar"),
-    "7z": ((), "7-zip"),
+    "unrar": ((), ("unrar",), ()),
+    "unar": (("-v",), ("unar",), ()),
+    "bsdtar": (("--version",), ("bsdtar",), ("gnu tar",)),
+    "7z": ((), ("7-zip",), ()),
 }
+
+#: probe outcomes
+PROBE_OK = "ok"            # it says it is the tool we want
+PROBE_NO = "no"            # it says it is something else that cannot do the job
+PROBE_UNKNOWN = "unknown"  # it did not say - try it on a real archive instead
 
 #: how a user forces one specific executable
 ENV_OVERRIDE = "LONGBOX_RAR_TOOL"
@@ -119,6 +138,23 @@ class Tool:
             raise ToolError(f"{self.name} exited {proc.returncode}"
                             + (f": {detail[-1]}" if detail else ""))
         return proc.stdout
+
+    def _run_probe(self, args: list[str]) -> bytes:
+        """Run the capability probe: stdout *and* stderr, non-zero exit tolerated.
+
+        Version banners are not consistently on stdout and "unrecognised argument"
+        is not consistently exit 0, so neither is a reason to write a tool off.
+        """
+        cmd = [self.path] + [str(a) for a in args]
+        kwargs: dict = {}
+        if os.name == "nt":  # pragma: no cover - Windows only
+            kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        try:
+            proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                  timeout=PROBE_TIMEOUT, check=False, **kwargs)
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise ToolError(f"{self.name} could not be run: {exc}") from exc
+        return proc.stdout + b"\n" + proc.stderr
 
     # -- listing -----------------------------------------------------------
     def list_names(self, archive: str) -> list[str]:
@@ -268,14 +304,25 @@ def _candidate_paths(name: str) -> list[str]:
     return unique
 
 
-def _probe(tool: Tool) -> bool:
-    """Does this executable really do the job?  (GNU tar is rejected here.)"""
-    args, needle = PROBE.get(tool.name, ((), ""))
+def _probe(tool: Tool) -> str:
+    """Classify an executable: ``PROBE_OK``, ``PROBE_NO`` or ``PROBE_UNKNOWN``.
+
+    A non-zero exit or a banner on stderr means "we learned nothing", NOT "this
+    tool cannot read a RAR" - real ``unrar`` with no arguments exits non-zero on
+    several builds, and unrarlib's banner goes to stderr on some of them.  Only a
+    recognised-wrong answer (GNU tar) excludes a tool.
+    """
+    args, accept, reject = PROBE.get(tool.name, ((), (), ()))
     try:
-        output = tool._run(list(args), timeout=PROBE_TIMEOUT)
+        output = tool._run_probe(list(args))
     except ToolError:
-        return False
-    return needle in _text(output).casefold()
+        return PROBE_UNKNOWN
+    text = _text(output).casefold()
+    if any(needle in text for needle in accept):
+        return PROBE_OK
+    if any(needle in text for needle in reject):
+        return PROBE_NO
+    return PROBE_UNKNOWN
 
 
 # ------------------------------------------------------------------- resolution
@@ -290,7 +337,13 @@ def reset_cache() -> None:
 
 
 def discover() -> list[Tool]:
-    """Every tool on this PC that is in the documented order and passes its probe."""
+    """Every tool on this PC in the documented order that is worth trying.
+
+    That is the tools the probe recognised, plus the ones it could not classify:
+    an unclassifiable candidate costs one failed attempt on the first real
+    archive and is then skipped for the run, while wrongly dropping it would
+    leave the owner with unreadable files for no reason.
+    """
     override = (os.environ.get(ENV_OVERRIDE) or "").strip()
     if override:
         if _exists(override):
@@ -300,7 +353,7 @@ def discover() -> list[Tool]:
     for name in TOOL_ORDER:
         for path in _candidate_paths(name):
             tool = Tool(name, path)
-            if _probe(tool):
+            if _probe(tool) != PROBE_NO:
                 found.append(tool)
                 break
     return found

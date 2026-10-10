@@ -65,7 +65,7 @@ def test_missing_static_file_is_a_404(client):
 
 def test_the_ui_does_not_shadow_the_api(client):
     assert client.get("/api/health").json()["status"] == "ok"
-    assert client.get("/api/comics").json()["total"] == 14
+    assert client.get("/api/comics").json()["total"] == 15
 
 
 def test_years_endpoint_fills_the_year_filter(client):
@@ -87,7 +87,7 @@ def test_status_filter_lists_unreadable_files_with_their_reason(client):
 
 def test_status_filter_keeps_the_rest_of_the_library(client):
     readable = client.get("/api/comics", params={"status": "ok", "limit": 100}).json()
-    assert readable["total"] == 12
+    assert readable["total"] == 13
     assert {item["status"] for item in readable["items"]} == {"ok"}
     assert client.get("/api/comics", params={"status": "nothing-like-this"}).json()["total"] == 0
 
@@ -97,7 +97,7 @@ def test_status_filter_combines_with_series_and_read(client):
     assert filtered["total"] == 4
     unread = client.get("/api/comics", params={"status": "ok", "read": "false",
                                                "limit": 100}).json()
-    assert unread["total"] == 12
+    assert unread["total"] == 13
 
 
 def test_reader_can_save_a_place_and_mark_an_issue_read(client):
@@ -118,7 +118,7 @@ def test_next_issue_lookup_uses_the_series_filter_and_issue_sort(client):
 
 def test_rescan_button_has_an_endpoint_to_call(client):
     summary = client.post("/api/scan").json()
-    assert summary["found"] == 14
+    assert summary["found"] == 15
     assert summary["errors"] == 2
     assert len(summary["error_files"]) == 2
     assert "elapsed" in summary and "total_in_db" in summary

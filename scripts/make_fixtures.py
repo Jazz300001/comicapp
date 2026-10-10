@@ -23,6 +23,9 @@ from PIL import Image, ImageDraw
 ROOT = Path(__file__).resolve().parents[1]
 SAMPLES = ROOT / "samples"
 
+#: real RAR4 magic bytes, used by the signature-only fixture in build()
+RAR4_SIGNATURE = b"Rar!\x1a\x07\x00"
+
 PAGE_WIDTH, PAGE_HEIGHT = 300, 450
 SMALL_PAGE_SIZE = (100, 150)
 JUNK_PAGE_SIZE = (160, 226)
@@ -265,6 +268,3 @@ def main(argv: list[str] | None = None) -> int:
 if __name__ == "__main__":
     raise SystemExit(main())
 
-
-#: real RAR4 magic bytes, used by the signature-only fixture above
-RAR4_SIGNATURE = b"Rar!\x1a\x07\x00"

@@ -204,9 +204,11 @@ def test_unreadable_files_are_grouped_by_reason_in_one_place(client):
     assert sum(group["count"] for group in body["groups"]) == 2
     assert all(group["fix"] for group in body["groups"])
     kinds = {group["kind"] for group in body["groups"]}
-    assert kinds == {"rar_tool_missing", "archive_tool_failed"} or kinds == {"rar_tool_missing"} \
-        or kinds == {"corrupt_zip", "rar_tool_missing"} or kinds == {"archive_tool_failed"} \
-        or kinds == {"corrupt_zip", "archive_tool_failed"}
+    # the unreadable .cbz is named for what it is (no known container at all); the
+    # signature-only .cbr is either "no RAR tool on this PC" or "the tool that is
+    # here could not list it", depending on what the machine has installed
+    assert kinds in ({"container_unknown", "rar_tool_missing"},
+                     {"container_unknown", "archive_tool_failed"})
     rar_group = next(group for group in body["groups"]
                      if group["container"] in ("rar4", "rar5"))
     assert rar_group["files"][0]["filename"].endswith(".cbr")

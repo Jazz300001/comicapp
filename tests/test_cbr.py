@@ -58,6 +58,8 @@ LOG = "$log"
 NAMES = $names
 PAGE = bytes.fromhex("$page_hex")
 PROBE_TEXT = "$probe"
+PROBE_EXIT = $probe_exit
+PROBE_STDERR = $probe_stderr
 CHATTER = $chatter
 FAIL_LIST = $fail_list
 FAIL_EXTRACT = $fail_extract
@@ -110,8 +112,11 @@ elif KIND == "7z" and args[:1] == ["x"] and "-so" not in args:
     out_dir = joined_flag("-o")
 
 if is_probe():
-    sys.stdout.write(PROBE_TEXT + "\\n")
-    sys.exit(0)
+    if PROBE_STDERR:
+        sys.stderr.write(PROBE_TEXT + "\\n")
+    else:
+        sys.stdout.write(PROBE_TEXT + "\\n")
+    sys.exit(PROBE_EXIT)
 
 if is_list():
     if FAIL_LIST:
@@ -187,16 +192,31 @@ class Stubs:
     def add(self, kind: str, name: str | None = None, *, probe: str | None = None,
             names=("page1.jpg", "page2.jpg", "page3.jpg"), page: bytes = PAGE_BYTES,
             chatter: bool = False, fail_list: bool = False,
-            fail_extract: bool = False, directory: Path | None = None) -> str:
+            fail_extract: bool = False, probe_exit: int = 0, probe_stderr: bool = False,
+            directory: Path | None = None) -> str:
         target = (directory or self.dir) / (name or kind)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(STUB.substitute(
             python=sys.executable, kind=kind, log=str(self.log),
             names=repr(list(names)), page_hex=page.hex(),
             probe=probe if probe is not None else PROBE_TEXT[kind],
+            probe_exit=probe_exit, probe_stderr=probe_stderr,
             chatter=chatter, fail_list=fail_list, fail_extract=fail_extract))
         target.chmod(0o755)
+        # discovery is cached for the run, so a tool that has just appeared (or just
+        # been replaced) has to invalidate it - otherwise the next call answers from
+        # a scan that predates the change
+        tools_mod.reset_cache()
         return str(target)
+
+    def clear_calls(self) -> None:
+        """Forget the calls so far, so the log shows only what happens next.
+
+        Every invocation is logged, capability probes included; a test that is
+        about the order tools are tried *on an archive* clears the log after the
+        deliberate `candidates()` call that triggers discovery.
+        """
+        self.log.write_text("")
 
     def calls(self) -> list[str]:
         if not self.log.exists():
@@ -295,6 +315,7 @@ def test_tool_chain_tries_the_documented_order_and_skips_what_fails(tmp_path, st
     stubs.add("7z", chatter=True)           # 4th: never reached
 
     assert [tool.name for tool in tools_mod.candidates()] == ["unrar", "unar", "bsdtar", "7z"]
+    stubs.clear_calls()          # discovery has probed all four; log only the work now
 
     with archive_mod.open_archive(str(rar_file)) as handle:
         assert handle.tool.name == "bsdtar"                 # first one that works
@@ -311,6 +332,7 @@ def test_the_first_working_tool_is_the_one_used(tmp_path, stubs, rar_file):
     for kind in ("unrar", "unar", "bsdtar", "7z"):
         stubs.add(kind)
     assert [tool.name for tool in tools_mod.candidates()] == ["unrar", "unar", "bsdtar", "7z"]
+    stubs.clear_calls()
     with archive_mod.open_archive(str(rar_file)) as handle:
         assert handle.tool.name == "unrar"
         assert handle.read("page3.jpg") == PAGE_BYTES
@@ -330,6 +352,48 @@ def test_gnu_tar_is_rejected_and_bsdtar_is_accepted(tmp_path, stubs, rar_file):
 
     stubs.add("bsdtar")                                     # ...but bsdtar reads RAR
     assert [tool.name for tool in tools_mod.candidates()] == ["bsdtar"]
+
+
+@windows_skip
+def test_a_probe_that_cannot_tell_does_not_drop_the_tool(tmp_path, stubs, rar_file):
+    """The probe is a guess; opening a real archive is the only proof.
+
+    Real UnRAR builds answer a bare ``unrar`` with a usage screen on *stderr* and a
+    non-zero exit, and some wrappers have no ``--version`` at all.  Reading that as
+    "this PC has no RAR tool" is exactly how the owner is told nothing can read his
+    .cbr files while UnRAR.exe sits in ``C:\\Program Files\\WinRAR``.  So: an
+    inconclusive probe keeps the tool in the chain, and the real archive decides.
+    """
+    stubs.add("unrar", probe="Usage: <command> [options]  (no version flag here)",
+              probe_exit=1, probe_stderr=True)          # says nothing recognisable
+    assert [tool.name for tool in tools_mod.candidates()] == ["unrar"]
+
+    stubs.clear_calls()
+    with archive_mod.open_archive(str(rar_file)) as handle:
+        assert handle.tool.name == "unrar"              # tried, and it worked
+        assert handle.pages() == ["page1.jpg", "page2.jpg", "page3.jpg"]
+        assert handle.read("page1.jpg") == PAGE_BYTES
+
+
+@windows_skip
+def test_a_tool_that_fails_on_a_real_archive_is_skipped_for_the_run(tmp_path, stubs, rar_file):
+    """Unclassifiable -> still tried; demonstrably broken -> retired for the run."""
+    stubs.add("unrar", probe="Usage: <command> [options]  (no version flag here)",
+              probe_exit=1, probe_stderr=True, fail_list=True)   # cannot open it
+    stubs.add("bsdtar")                                          # this one can
+    assert [tool.name for tool in tools_mod.candidates()] == ["unrar", "bsdtar"]
+
+    stubs.clear_calls()
+    with archive_mod.open_archive(str(rar_file)) as handle:
+        assert handle.tool.name == "bsdtar"             # the chain moved on
+        assert handle.read("page2.jpg") == PAGE_BYTES
+    assert stubs.order_of_kinds() == ["unrar", "bsdtar"]
+    assert tools_mod.resolve().name == "bsdtar"
+
+    stubs.clear_calls()                                 # second archive of the run
+    with archive_mod.open_archive(str(rar_file)) as handle:
+        assert handle.tool.name == "bsdtar"
+    assert stubs.order_of_kinds() == ["bsdtar"]         # the broken one was not retried
 
 
 @windows_skip
@@ -422,24 +486,41 @@ def test_an_unreadable_file_is_never_counted_as_indexed_twice(tmp_path, stubs):
 
 
 # ------------------------------------------------------------------ migration
-OLD_SCHEMA = """
-CREATE TABLE comics (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    path TEXT NOT NULL UNIQUE,
-    filename TEXT,
-    series TEXT,
-    archive_type TEXT,
-    status TEXT NOT NULL DEFAULT 'ok',
-    error_message TEXT,
-    indexed_at TEXT
-);
-CREATE TABLE progress (
-    comic_id INTEGER PRIMARY KEY REFERENCES comics(id) ON DELETE CASCADE,
-    last_page INTEGER NOT NULL DEFAULT 0,
-    "read" INTEGER NOT NULL DEFAULT 0,
-    updated_at TEXT
-);
-"""
+#: a realistic v1 database: every column the first release shipped, i.e. today's
+#: column list minus the three that were added later (db.ADDED_COLUMNS).  Built
+#: from the real list so it cannot drift out of date silently.
+_ADDED = {name for name, _ in db_mod.ADDED_COLUMNS}
+_V1_TYPES = {
+    "path": "TEXT NOT NULL UNIQUE",
+    "issue_sort": "REAL",
+    "year": "INTEGER",
+    "month": "INTEGER",
+    "day": "INTEGER",
+    "page_count": "INTEGER",
+    "comicinfo_page_count": "INTEGER",
+    "cover_page": "INTEGER",
+    "comicinfo_present": "INTEGER NOT NULL DEFAULT 0",
+    "file_size": "INTEGER",
+    "mtime": "REAL",
+    "status": "TEXT NOT NULL DEFAULT 'ok'",
+}
+OLD_SCHEMA = (
+    "CREATE TABLE comics (\n"
+    "    id INTEGER PRIMARY KEY AUTOINCREMENT,\n"
+    + ",\n".join(f"    {name} {_V1_TYPES.get(name, 'TEXT')}"
+                 for name in db_mod.COMIC_COLUMNS if name not in _ADDED)
+    + "\n);\n"
+    "CREATE INDEX idx_comics_series_key ON comics(series_key);\n"
+    "CREATE INDEX idx_comics_status ON comics(status);\n"
+    "CREATE INDEX idx_comics_year ON comics(year);\n"
+    "CREATE INDEX idx_comics_comicvine ON comics(comicvine_issue_id);\n"
+    'CREATE TABLE progress (\n'
+    "    comic_id INTEGER PRIMARY KEY REFERENCES comics(id) ON DELETE CASCADE,\n"
+    "    last_page INTEGER NOT NULL DEFAULT 0,\n"
+    '    "read" INTEGER NOT NULL DEFAULT 0,\n'
+    "    updated_at TEXT\n"
+    ");\n"
+)
 
 
 def test_an_old_database_is_migrated_in_place(tmp_path):
