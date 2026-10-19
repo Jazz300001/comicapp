@@ -316,6 +316,38 @@ button.stat-chip:hover { border-color: var(--accent); color: var(--ink); }
 .problem-list { list-style: none; margin: 8px 0 0; padding: 0; }
 .problem-list .problem { background: none; border: 0; padding: 4px 0; margin: 0; }
 details > summary { cursor: pointer; font-size: 13px; margin-top: 6px; }
+/* --------------------------------------------------------------- doctor panel */
+/* What the last `python -m longbox.doctor` run found: one block per section,
+   each section's findings behind a "show" so the grid stays visible. */
+.doctor {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-raised);
+  padding: 12px 14px;
+  margin-bottom: 18px;
+}
+.doctor h2 { margin: 0 0 8px; font-size: 16px; }
+.doctor > p { margin: 0 0 10px; }
+.doctor code {
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--bg-input);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 5px;
+  word-break: break-all;
+}
+.doctor .problem-group { margin-bottom: 8px; }
+.doctor .problem-group:last-child { margin-bottom: 0; }
+.doctor-finding { padding: 8px 0; }
+.doctor-finding .problem-name { font-family: var(--font); }
+.keeper {
+  color: var(--ok);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  white-space: nowrap;
+}
 
 /* -------------------------------------------------------------------- issue */
 .issue { max-width: 940px; }

@@ -176,6 +176,112 @@ function syncControls() {
   sortEl.value = library.sort;
 }
 
+/* ------------------------------------------------------------ doctor panel */
+
+/* What the last `python -m longbox.doctor` run found.  The findings are read
+   from the database the CLI wrote; the page never runs a check itself and no
+   button here can change a comic file. */
+let lastDoctor = null;
+
+async function loadDoctor() {
+  try {
+    lastDoctor = await api("/api/doctor");
+  } catch (err) {
+    lastDoctor = { error: err.message };
+  }
+  return lastDoctor;
+}
+
+function stampLabel(value) {
+  if (!value) return "an unknown time";
+  const when = new Date(value.replace(" ", "T"));
+  if (isNaN(when.getTime())) return value;
+  return when.toLocaleString();
+}
+
+function doctorFileList(finding) {
+  if (!finding.files || !finding.files.length) return "";
+  const rows = finding.files.map((file) => {
+    const facts = [];
+    if (file.file_size_human) facts.push(file.file_size_human);
+    if (file.page_count) facts.push(`${file.page_count} pages`);
+    if (file.container) facts.push(file.container);
+    if (file.dimensions && file.dimensions.length === 2) {
+      facts.push(`${file.dimensions[0]}x${file.dimensions[1]}`);
+    }
+    if (file.status && file.status !== "ok") {
+      facts.push(`UNREADABLE (${file.error_kind || "no reason recorded"})`);
+    }
+    return `<li class="problem">
+  <span class="problem-name">${esc(file.filename || file.path || "")}` +
+    `${file.keeper ? ' <span class="keeper">the doctor would keep this copy</span>' : ""}</span>
+  ${file.folder ? `<span class="problem-path">${esc(file.folder)}</span>` : ""}
+  ${facts.length ? `<span class="problem-path">${esc(facts.join(" | "))}</span>` : ""}
+</li>`;
+  }).join("");
+  const more = finding.files_total > finding.files.length
+    ? `<li class="problem-path">… and ${finding.files_total - finding.files.length} more</li>` : "";
+  const label = finding.files_total === 1 ? "Show the file" : `Show the ${finding.files_total} files`;
+  return `<details><summary>${esc(label)}</summary>
+    <ul class="problem-list">${rows}${more}</ul></details>`;
+}
+
+function doctorFinding(finding) {
+  const where = finding.series
+    ? `<span class="problem-path">${esc(finding.series)}` +
+      `${finding.issue_number ? ` #${esc(finding.issue_number)}` : ""}</span>`
+    : "";
+  const lines = [
+    finding.verdict ? `Verdict: ${finding.verdict}` : "",
+    finding.suggestion ? `The doctor suggests: ${finding.suggestion}` : "",
+    finding.fix || "",
+    finding.note ? `Careful: ${finding.note}` : "",
+  ].filter(Boolean).map((line) => `<div class="problem-fix">${esc(line)}</div>`).join("");
+  return `<li class="problem doctor-finding">
+  <span class="problem-name">${esc(finding.summary)}</span>
+  ${where}${lines}${doctorFileList(finding)}
+</li>`;
+}
+
+function doctorSection(section) {
+  return `<div class="problem-group doctor-section">
+  <div class="problem-head"><strong>${section.count}</strong> ` +
+    `${section.count === 1 ? "finding" : "findings"} &mdash; ${esc(section.label)}</div>
+  <details><summary>Show what the doctor found</summary>
+    <ul class="problem-list">${section.findings.map(doctorFinding).join("")}</ul></details>
+</div>`;
+}
+
+function doctorPanel() {
+  if (!lastDoctor) return "";
+  const head = '<h2>Library doctor</h2>';
+  if (lastDoctor.error) {
+    return `<section class="problems doctor">${head}
+  <p class="muted small">Could not read the doctor's findings: ${esc(lastDoctor.error)}</p>
+</section>`;
+  }
+  if (!lastDoctor.has_run) {
+    return `<section class="problems doctor">${head}
+  <p class="muted small">No check has run yet &mdash; on your PC run
+  <code>${esc(lastDoctor.command)}</code> (add <code>--deep</code> to read every page of every
+  archive), then reload this page. ${esc(lastDoctor.note)}</p>
+</section>`;
+  }
+  const run = lastDoctor.run || {};
+  const kind = run.deep ? "deep check, every page was read" : "quick check of what is indexed";
+  const refresh = run.deep ? lastDoctor.deep_command : lastDoctor.command;
+  const summary = lastDoctor.sections.length
+    ? lastDoctor.sections.map(doctorSection).join("")
+    : '<p class="muted small">Nothing wrong: every indexed archive opened, no issue has two ' +
+      'files and no numbered run has a gap.</p>';
+  return `<section class="problems doctor">${head}
+  <p class="muted small">Last run ${esc(stampLabel(run.finished_at))} &middot;
+  ${plural(lastDoctor.total, "finding")} &middot; ${esc(kind)}.<br>
+  To check again, run <code>${esc(refresh)}</code> on your PC, then reload this page.
+  ${esc(lastDoctor.note)}</p>
+  ${summary}</section>`;
+}
+
 /* ------------------------------------------------------------- stats strip */
 
 let lastStats = null;
@@ -275,6 +381,10 @@ async function renderRoute() {
     readLibraryFromParams(route.params);
     sessionStorage.setItem("longbox.library", libraryHash());
     syncControls();
+    /* the doctor's findings are fetched before the grid so the panel is in the
+       first paint, and re-fetched on every visit: if the owner runs the CLI in
+       another window, coming back to the library shows the new result. */
+    await loadDoctor();
     await loadLibrary();
   } else if (route.name === "detail") {
     await renderDetail(route.id);
@@ -452,6 +562,7 @@ function wireThumbs(root) {
 
 function paintLibrary() {
   const parts = [];
+  parts.push(doctorPanel());
   if (library.status) parts.push(problemsPanel());
   if (library.error) {
     parts.push(errorPanel("Could not load your library", library.error));
