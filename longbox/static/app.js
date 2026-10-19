@@ -13,6 +13,14 @@
 
 const PAGE_SIZE = 60;
 const PROGRESS_DEBOUNCE_MS = 1200;
+/* Reading takes the whole window: the class below hides the library chrome
+   (topbar + filter bar) and zeroes the page padding while an issue is open. */
+const READER_BODY_CLASS = "reader-open";
+/* A page smaller than the stage is grown to fit it, but a thumbnail-sized scan
+   must not be blown up into mush. */
+const MAX_PAGE_UPSCALE = 3;
+/* .stage has 8px of padding on each side; the page is fitted inside that. */
+const STAGE_PADDING = 16;
 
 const viewEl = document.getElementById("view");
 const controlsEl = document.getElementById("library-controls");
@@ -377,6 +385,10 @@ async function renderRoute() {
   const route = parseRoute();
   controlsEl.hidden = route.name !== "library";
   setReader(null);
+  /* the reader owns the whole window the moment the address says so, so the
+     chrome never flashes back in while the issue is being fetched; renderReader
+     hands the window back if the issue cannot be opened. */
+  setReaderMode(route.name === "reader");
   if (route.name === "library") {
     readLibraryFromParams(route.params);
     sessionStorage.setItem("longbox.library", libraryHash());
@@ -765,10 +777,26 @@ async function renderDetail(id) {
 let reader = null;
 let pageToken = 0;
 let progressTimer = null;
+let stageObserver = null;
 
 function setReader(value) {
-  if (reader && !value) flushProgress();
+  if (reader && !value) {
+    flushProgress();
+    if (stageObserver) {
+      stageObserver.disconnect();
+      stageObserver = null;
+    }
+  }
   reader = value;
+}
+
+/* While the reader is open the library chrome is hidden and the reader fills
+   the viewport (see the `body.reader-open` rules in styles.css). Leaving the
+   reader - Escape, the "Issue" or "Library" button, the back button, any other
+   address - always puts the chrome back, because every route change runs
+   through renderRoute(). */
+function setReaderMode(on) {
+  document.body.classList.toggle(READER_BODY_CLASS, Boolean(on));
 }
 
 function readerBackHash() {
@@ -825,6 +853,7 @@ async function renderReader(id, page) {
   try {
     comic = await api(`/api/comics/${id}`);
   } catch (err) {
+    setReaderMode(false);
     viewEl.innerHTML = errorPanel("Could not open the reader", err.message) + backLink();
     return;
   }
@@ -837,6 +866,7 @@ async function renderReader(id, page) {
     viewEl.innerHTML = errorPanel("The reader cannot open this issue", reason) +
       backLink("Back to the issue") +
       `<p><a href="${esc(sessionStorage.getItem("longbox.library") || "#/")}">&larr; Back to library</a></p>`;
+    setReaderMode(false);
     return;
   }
 
@@ -849,21 +879,71 @@ async function renderReader(id, page) {
 }
 
 function paintReaderShell() {
+  setReaderMode(true);
   viewEl.innerHTML = `<section class="reader">
   <div class="reader-bar" id="reader-bar"></div>
   <div class="stage" id="stage"></div>
   <div class="reader-foot" id="reader-foot"></div>
 </section>`;
+  watchStage();
   paintReaderBar();
   paintReaderFoot();
+}
+
+/* ------------------------------------------------------------- page fitting */
+/* A page is shown whole: it is scaled to the stage so that neither the width
+   nor the height overflows, which is "fit height" for the usual tall comic
+   page and "fit width" for a landscape spread.  Small and low-res pages are
+   grown the same way (up to MAX_PAGE_UPSCALE) instead of floating tiny in the
+   middle of the window.  The aspect ratio is never touched and nothing is ever
+   cropped, because both sides are computed from one single scale factor. */
+
+function fitPage(image) {
+  const stage = document.getElementById("stage");
+  if (!stage || !image || !image.naturalWidth || !image.naturalHeight) return;
+  const boxWidth = Math.max(1, stage.clientWidth - STAGE_PADDING);
+  const boxHeight = Math.max(1, stage.clientHeight - STAGE_PADDING);
+  const scaleByWidth = boxWidth / image.naturalWidth;
+  const scaleByHeight = boxHeight / image.naturalHeight;
+  const scale = Math.min(scaleByWidth, scaleByHeight, MAX_PAGE_UPSCALE);
+  image.style.width = `${Math.max(1, Math.floor(image.naturalWidth * scale))}px`;
+  image.style.height = `${Math.max(1, Math.floor(image.naturalHeight * scale))}px`;
+  const mode = scaleByWidth < scaleByHeight ? "width" : "height";
+  stage.dataset.fit = mode;
+  image.dataset.fit = mode;
+  image.dataset.scale = String(Math.round(scale * 100) / 100);
+  if (reader) {
+    reader.fit = { mode, scale, upscaled: scale > 1.01 };
+  }
+}
+
+function refitPage() {
+  const image = viewEl.querySelector(".page-image");
+  if (image && image.complete && image.naturalWidth) fitPage(image);
+}
+
+/* The stage changes size when the window is resized, when the browser zoom
+   changes, and when the chrome goes away - the page follows it. */
+function watchStage() {
+  const stage = document.getElementById("stage");
+  if (stageObserver) stageObserver.disconnect();
+  stageObserver = null;
+  if (!stage) return;
+  if (typeof ResizeObserver === "function") {
+    stageObserver = new ResizeObserver(() => refitPage());
+    stageObserver.observe(stage);
+  }
+  refitPage();
 }
 
 function paintReaderBar() {
   const bar = document.getElementById("reader-bar");
   if (!bar || !reader) return;
   const comic = reader.comic;
+  const libraryUrl = sessionStorage.getItem("longbox.library") || "#/";
   bar.innerHTML = `
     <a class="btn" href="${esc(detailUrl(comic.id))}" title="Back to the issue (Esc)">Issue</a>
+    <a class="btn" href="${esc(libraryUrl)}" title="Back to the library">Library</a>
     <button type="button" class="btn" id="prev"${reader.page <= 1 ? " disabled" : ""}>&larr; Prev</button>
     <button type="button" class="btn" id="next"${reader.page >= reader.total ? " disabled" : ""}>Next &rarr;</button>
     <span class="reader-progress">Page</span>
@@ -962,6 +1042,7 @@ function showPage(wanted, options) {
     if (token !== pageToken || !reader) return;
     stage.innerHTML = "";
     stage.appendChild(image);
+    fitPage(image);
     image.addEventListener("click", () => showPage(reader.page + 1));
     saveProgress(page);
     preload(page);
@@ -1057,6 +1138,10 @@ document.addEventListener("keydown", (event) => {
       break;
   }
 });
+
+/* Browser zoom and a resized window both change the stage; the page follows it
+   even where ResizeObserver is not there to notice. */
+window.addEventListener("resize", refitPage);
 
 window.addEventListener("pagehide", () => {
   if (reader && reader.page) {
