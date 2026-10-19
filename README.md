@@ -363,3 +363,37 @@ python -m longbox.doctor --path testdoctor --db data\testdoctor.db --deep
   `doctor_findings`, the metadata graph over the embedded
   `Characters`/`Teams`/`Locations`, panel extractor, then
   the timeline / character-network / "where am I?" views.
+
+## The library doctor's findings in the web page
+
+The library page now opens with a **Library doctor** panel: the findings of the last
+`python -m longbox.doctor` run, one block per section (unreadable archives, duplicate
+issues, missing issue numbers), each finding in the doctor's own words with its verdict
+and suggestion, and the file names behind it.
+
+Run the check on your PC, then reload the page — the app only *displays* what the check
+found, it never runs a check itself and no button in that panel can change, move or
+delete a comic:
+
+```bat
+.venv\Scripts\activate
+python -m longbox.doctor
+:: or, to read every page of every archive (slower):
+python -m longbox.doctor --deep
+```
+
+The panel header shows when the check last ran, whether it was the quick or the `--deep`
+check, how many findings there are, and the exact command to run it again. Until a check
+has been run it says so instead of showing an empty panel:
+
+> No check has run yet — on your PC run `python -m longbox.doctor` (add `--deep` to read
+> every page of every archive), then reload this page.
+
+The findings come from the app's own JSON route, which is read-only and GET-only:
+
+```bat
+curl http://127.0.0.1:8000/api/doctor
+```
+
+Without a run (or with nothing wrong) it answers `{"has_run": false, ...}` / empty
+`sections`, so the panel degrades gracefully rather than erroring.

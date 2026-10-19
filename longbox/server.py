@@ -116,6 +116,132 @@ class ReadIn(BaseModel):
     read: bool = True
 
 
+#: The doctor's own section names (`missing_number` today; `gap` is accepted in
+#: case an index written by an older doctor run used it).  The panel shows one
+#: block per section, in this order.
+DOCTOR_SECTION_LABELS = (
+    ("unreadable", "Unreadable or broken archives"),
+    ("duplicate", "Duplicate issues"),
+    ("missing_number", "Missing issue numbers"),
+    ("gap", "Missing issue numbers"),
+)
+DOCTOR_COMMAND = "python -m longbox.doctor"
+DOCTOR_DEEP_COMMAND = "python -m longbox.doctor --deep"
+DOCTOR_NOTE = ("Read-only check: the doctor never moves, renames or deletes anything in "
+               "your comics folder.")
+#: worst first, so the file that cannot be opened is above the nice-to-know line
+_SEVERITY_ORDER = {"error": 0, "warning": 1, "info": 2}
+
+
+def _doctor_files(detail: Any, limit: int, keeper: str | None = None) -> tuple[list[dict], int]:
+    """The file names behind one finding, whatever shape the section stores them in."""
+    if not isinstance(detail, dict):
+        return [], 0
+    raw = detail.get("copies")
+    if not isinstance(raw, list):
+        raw = detail.get("files")
+    if not isinstance(raw, list):
+        return [], 0
+    files = []
+    for entry in raw:
+        if isinstance(entry, dict):
+            item = {key: entry.get(key) for key in ("filename", "path", "folder", "file_size",
+                                                    "file_size_human", "page_count",
+                                                    "container", "dimensions", "status",
+                                                    "error_kind", "message")}
+            item["keeper"] = bool(keeper) and entry.get("path") == keeper
+        else:
+            item = {"filename": str(entry), "path": None, "folder": None, "keeper": False}
+        files.append({key: value for key, value in item.items()
+                      if value is not None or key == "keeper"})
+    return files[:limit], len(files)
+
+
+def doctor_panel(conn, limit: int = 100) -> dict:
+    """The latest doctor run and its findings, in the shape the web panel renders.
+
+    `python -m longbox.doctor` keeps only its newest run in `doctor_findings`
+    (stale findings would show problems that are already fixed), so this is
+    simply what the last check found.  Reading it never writes to the index or
+    to the comics folder.
+    """
+    payload = {
+        "has_run": False,
+        "run": None,
+        "total": 0,
+        "sections": [],
+        "command": DOCTOR_COMMAND,
+        "deep_command": DOCTOR_DEEP_COMMAND,
+        "note": DOCTOR_NOTE,
+    }
+    try:
+        run = conn.execute("SELECT * FROM doctor_runs ORDER BY finished_at DESC LIMIT 1"
+                           ).fetchone()
+        rows = conn.execute("SELECT * FROM doctor_findings ORDER BY id").fetchall()
+    except sqlite3.OperationalError:  # an index created before the doctor existed
+        return payload
+    if run is None:
+        return payload
+    summary = {}
+    try:
+        summary = json.loads(run["summary"] or "{}")
+    except (TypeError, ValueError):
+        summary = {}
+    payload["has_run"] = True
+    payload["run"] = {
+        "run_id": run["run_id"],
+        "started_at": run["started_at"],
+        "finished_at": run["finished_at"],
+        "comics_path": run["comics_path"],
+        "db_path": run["db_path"],
+        "deep": bool(run["deep"]),
+        "exit_code": run["exit_code"],
+        "summary": summary,
+    }
+    rows = conn.execute(
+        "SELECT * FROM doctor_findings ORDER BY id").fetchall()
+    grouped: dict[str, list[dict]] = {}
+    for row in rows:
+        try:
+            detail = json.loads(row["detail"] or "null")
+        except (TypeError, ValueError):
+            detail = None
+        keeper = detail.get("keeper") if isinstance(detail, dict) else None
+        files, files_total = _doctor_files(detail, limit, keeper)
+        grouped.setdefault(row["section"], []).append({
+            "id": row["id"],
+            "kind": row["kind"],
+            "severity": row["severity"],
+            "series": row["series"],
+            "issue_number": row["issue_number"],
+            "path": row["path"],
+            "summary": row["summary"],
+            "files": files,
+            "files_total": files_total,
+            "verdict": detail.get("verdict") if isinstance(detail, dict) else None,
+            "suggestion": detail.get("suggestion") if isinstance(detail, dict) else None,
+            "fix": detail.get("fix") if isinstance(detail, dict) else None,
+            "note": detail.get("note") if isinstance(detail, dict) else None,
+            "count": detail.get("count") if isinstance(detail, dict) else None,
+        })
+    order = [name for name, _label in DOCTOR_SECTION_LABELS]
+    sections = []
+    for section in list(dict.fromkeys(order + sorted(grouped))):
+        findings = grouped.get(section)
+        if not findings:
+            continue
+        findings.sort(key=lambda item: _SEVERITY_ORDER.get(item["severity"], 3))
+        sections.append({
+            "section": section,
+            "label": dict(DOCTOR_SECTION_LABELS).get(section, section.replace("_", " ")),
+            "count": len(findings),
+            "findings": findings,
+        })
+    payload["sections"] = sections
+    payload["total"] = len(rows)
+    return payload
+
+
 def create_app(comics_path: str | None = None, db_path: str | None = None,
                thumb_dir: str | None = None) -> FastAPI:
     comics_path = os.path.abspath(os.path.expanduser(
@@ -400,7 +526,17 @@ def create_app(comics_path: str | None = None, db_path: str | None = None,
         ordered = sorted(groups.values(), key=lambda group: -group["count"])
         return {"total": len(rows), "groups": ordered,
                 "reader": tools_mod.tool_summary()}
+    # ------------------------------------------------------------ doctor panel
+    @app.get("/api/doctor")
+    def doctor_findings(limit: int = Query(default=100, ge=1, le=MAX_LIMIT)) -> dict:
+        """What the last `python -m longbox.doctor` run found, per section.
 
+        Read-only: the findings are whatever the doctor stored in
+        `doctor_findings` (the CLI does the reading, the app only displays it).
+        With no run yet the payload says so instead of failing, so the panel can
+        tell the owner which command to run.
+        """
+        return doctor_panel(conn, limit)
     # -------------------------------------------------------------- progress
     @app.post("/api/comics/{comic_id}/progress")
     def save_progress(comic_id: int, payload: ProgressIn) -> dict:
