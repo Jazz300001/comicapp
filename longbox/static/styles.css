@@ -409,10 +409,29 @@ p.summary { white-space: pre-wrap; margin: 0; font-size: 15px; }
   height: calc(100vh - var(--topbar-h));
   height: calc(100dvh - var(--topbar-h));
 }
+
+/* Reading owns the whole window: the topbar and the filter bar are hidden and
+   the page padding is dropped, so the stage gets everything the browser has
+   (58px of chrome + 18px of padding on each side).  `body.reader-open` is set
+   by app.js on the reader route and cleared as soon as the reader is left -
+   Escape, the Issue or Library button, the back button, any other address -
+   because every route change runs through renderRoute().  The reader bar and
+   foot stay on screen, and the stage keeps its own scrollbar, so nothing the
+   reader needs is out of reach. */
+body.reader-open .topbar,
+body.reader-open .controls {
+  display: none;
+}
+body.reader-open .view { padding: 0; }
+body.reader-open .reader {
+  height: 100vh;
+  height: 100dvh;
+}
 .reader-bar {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex: 0 0 auto;
   flex-wrap: wrap;
   padding: 8px 14px;
   border-bottom: 1px solid var(--line);
@@ -441,6 +460,7 @@ p.summary { white-space: pre-wrap; margin: 0; font-size: 15px; }
 
 .stage {
   flex: 1 1 auto;
+  min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -448,7 +468,14 @@ p.summary { white-space: pre-wrap; margin: 0; font-size: 15px; }
   background: #0d0f12;
   padding: 8px;
 }
+/* app.js sizes the page to the stage (fitPage): both sides come from one scale
+   factor, so the page is never stretched out of shape and never cropped - the
+   usual tall comic page fits by height, a landscape spread fits by width, and a
+   small or low-res page is grown to fill the window instead of floating tiny.
+   The bounds below are the safety net before the fit is computed, and flex is
+   not allowed to squeeze the image either. */
 .page-image {
+  flex: 0 0 auto;
   max-width: 100%;
   max-height: 100%;
   width: auto;
@@ -464,6 +491,7 @@ p.summary { white-space: pre-wrap; margin: 0; font-size: 15px; }
   display: flex;
   align-items: center;
   gap: 12px;
+  flex: 0 0 auto;
   flex-wrap: wrap;
   padding: 8px 14px;
   border-top: 1px solid var(--line);

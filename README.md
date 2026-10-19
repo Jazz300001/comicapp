@@ -397,3 +397,25 @@ curl http://127.0.0.1:8000/api/doctor
 
 Without a run (or with nothing wrong) it answers `{"has_run": false, ...}` / empty
 `sections`, so the panel degrades gracefully rather than erroring.
+
+## Reading an issue: the whole window, and pages that fit
+
+Open an issue and press **Read** (or a cover in the continue strip) and the book takes the whole
+window: the Longbox top bar and the filter row step aside, and so does the 18px page padding, so the
+page gets all of the screen. Nothing is lost while you read:
+
+- **Escape** still takes you back to that issue's page, exactly as before.
+- **Library** in the reader bar goes straight back to the grid you came from, filters and all;
+  **Issue** goes to the issue's page.
+- The reader bar (page number, Prev/Next, jump box, Mark read) and the foot line stay on screen, and
+  the page area keeps its own scrollbar.
+
+The page is fitted to the window: whichever of width or height runs out first decides the size, so a
+normal tall comic page fills the height, a landscape spread fills the width, and a small or low-res
+scan is scaled up to fit instead of floating tiny in the middle. The aspect ratio is never changed
+and nothing is ever cropped - both sides come from one scale factor - and a thumbnail-sized page
+stops growing at 3x so it does not turn to mush. Resizing the window or changing the browser zoom
+re-fits the page straight away.
+
+All of this is CSS and JavaScript in your browser: nothing extra is sent to the server and no file in
+your comics folder is touched. Your place in the issue is saved exactly as before.
