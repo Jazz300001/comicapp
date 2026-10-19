@@ -92,6 +92,36 @@ CREATE TABLE IF NOT EXISTS progress (
     "read"      INTEGER NOT NULL DEFAULT 0,
     updated_at  TEXT
 );
+
+-- `python -m longbox.doctor` writes what it found here, so a later UI panel can
+-- render the problems without re-running the checks.  Always the latest run only:
+-- stale findings would show the owner problems that are already fixed.
+CREATE TABLE IF NOT EXISTS doctor_runs (
+    run_id      TEXT PRIMARY KEY,
+    started_at  TEXT,
+    finished_at TEXT,
+    comics_path TEXT,
+    db_path     TEXT,
+    deep        INTEGER NOT NULL DEFAULT 0,
+    exit_code   INTEGER,
+    summary     TEXT
+);
+CREATE TABLE IF NOT EXISTS doctor_findings (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id       TEXT NOT NULL,
+    section      TEXT NOT NULL,   -- unreadable | duplicate | missing_number
+    severity     TEXT NOT NULL,   -- error | warning | info
+    kind         TEXT NOT NULL,   -- error_kind, identical_duplicate, quality_differs, gap, ...
+    series       TEXT,
+    series_key   TEXT,
+    issue_number TEXT,
+    summary      TEXT NOT NULL,   -- one plain-English line
+    detail       TEXT,            -- JSON evidence (copies, fix hint, files)
+    path         TEXT,            -- representative file, if any
+    created_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_doctor_findings_run ON doctor_findings(run_id);
+CREATE INDEX IF NOT EXISTS idx_doctor_findings_section ON doctor_findings(section);
 """
 
 #: JSON-encoded (list/dict) columns
